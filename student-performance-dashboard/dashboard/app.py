@@ -1,424 +1,255 @@
-"""
-app.py -- Student Performance Analytical Dashboard
-====================================================
-Run with:
-    streamlit run dashboard/app.py
-
-Tabs:
-    1. Overview            - KPIs + top-line trend
-    2. Performance Trends   - score trends over terms, by segment
-    3. Attendance Impact    - correlation + banded analysis
-    4. Subject-wise Analysis- per-subject strength/weakness, heatmap
-    5. Student Drill-down   - individual student view + at-risk list
-"""
-
-import sys
+from flask import Flask, render_template_string
 from pathlib import Path
+import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-import streamlit as st
+from analysis import dashboard_insights, kpi_summary
+from data_processing import get_processed_data
 
-from data_processing import get_processed_data           # noqa: E402
-from analysis import (                                    # noqa: E402
-    dashboard_insights,
-    kpi_summary,
-    score_trend_by_term,
-    attendance_vs_score,
-    attendance_band_performance,
-    subject_performance,
-    subject_by_class,
-    top_bottom_students,
-)
+app = Flask(__name__)
 
-st.set_page_config(
-    page_title="Student Performance Dashboard",
-    page_icon="🎓",
-    layout="wide",
-)
+HTML_TEMPLATE = """
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BrightPath Analytics</title>
+  <style>
+    :root { color-scheme: light; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: linear-gradient(135deg, #f3ebff 0%, #e8fbff 100%); color: #2d1b69; }
+    header { background: linear-gradient(135deg, #5b21b6, #22d3ee); color: white; padding: 56px 24px 32px; }
+    nav { display: flex; justify-content: space-between; align-items: center; max-width: 1200px; margin: 0 auto; }
+    nav a { color: white; text-decoration: none; margin-left: 16px; font-weight: 600; }
+    .hero { max-width: 1200px; margin: 24px auto 0; display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 24px; align-items: center; }
+    .hero h1 { font-size: 2.5rem; margin-bottom: 10px; }
+    .hero p { font-size: 1.05rem; line-height: 1.6; opacity: 0.95; }
+    .card { background: white; border-radius: 18px; padding: 20px; box-shadow: 0 12px 35px rgba(91, 33, 182, 0.12); }
+    section { max-width: 1200px; margin: 24px auto; padding: 0 24px 30px; }
+    .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    .metric { background: white; border: 1px solid #e7dcff; border-radius: 16px; padding: 18px; box-shadow: 0 10px 24px rgba(91, 33, 182, 0.08); }
+    .metric strong { display: block; font-size: 1.3rem; margin-top: 8px; color: #5b21b6; }
+    .pill { display: inline-block; padding: 8px 12px; border-radius: 999px; background: rgba(255,255,255,0.2); color: white; font-weight: 700; font-size: 0.9rem; }
+    .login-box { background: rgba(255,255,255,0.15); padding: 18px; border-radius: 14px; }
+    .login-box input, .login-box select { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #d8c8ff; margin-top: 8px; font-size: 0.95rem; }
+    .login-box button { margin-top: 10px; padding: 10px 14px; border: none; border-radius: 10px; background: white; color: #5b21b6; font-weight: 700; cursor: pointer; }
+    .bar-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+    .bar { flex: 1; background: #f1e9ff; height: 10px; border-radius: 999px; overflow: hidden; }
+    .bar > span { display: block; height: 100%; background: linear-gradient(90deg, #5b21b6, #22d3ee); border-radius: 999px; }
+    .dashboard-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    footer { text-align: center; padding: 30px 20px 40px; color: #5b6472; }
+    @media (max-width: 900px) { .hero, .grid, .dashboard-grid { grid-template-columns: 1fr; } nav { flex-direction: column; gap: 10px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <nav>
+      <div><strong>BrightPath Analytics</strong></div>
+      <div>
+        <a href="/">Student Portal</a>
+        <a href="/performance">Performance</a>
+        <a href="/early-warning">Early Warning</a>
+        <a href="/placement-readiness">Placement</a>
+        <a href="/overall-dashboard">Overall Dashboard</a>
+      </div>
+    </nav>
+    <div class="hero">
+      <div>
+        <span class="pill">Student Success Platform</span>
+        <h1>Student Portal</h1>
+        <p>Select a class and section, review the student count and roll range, and enter the student success experience with creative dashboards.</p>
+      </div>
+      <div class="card">
+        <h3>Student Access</h3>
+        <div class="login-box">
+          <label>Class</label>
+          <select><option>Class 10</option><option>Class 11</option><option>Class 12</option></select>
+          <label>Section</label>
+          <select><option>A</option><option>B</option><option>C</option></select>
+          <label>Roll Number</label>
+          <input placeholder="Enter roll number" />
+          <button onclick="window.location.href='/overall-dashboard'">Open Dashboard</button>
+        </div>
+      </div>
+    </div>
+  </header>
 
-# ----------------------------------------------------------------------
-# Data loading (cached)
-# ----------------------------------------------------------------------
-@st.cache_data
-def load_data():
-    return get_processed_data()
+  <section>
+    <h2>Quick Overview</h2>
+    <div class="grid">
+      <div class="metric">Class <strong>{{ selected_class }}</strong></div>
+      <div class="metric">Section <strong>{{ selected_section }}</strong></div>
+      <div class="metric">Roll Number <strong>{{ roll_range }}</strong></div>
+      <div class="metric">Portal Status <strong>Ready</strong></div>
+    </div>
+  </section>
 
-detailed, trends = load_data()
+  <section>
+    <h2>Featured Dashboard Views</h2>
+    <div class="dashboard-grid">
+      <div class="card"><h3>Why am I performing poorly?</h3><div class="bar-row"><span>Trend</span><div class="bar"><span style="width: 72%"></span></div></div></div>
+      <div class="card"><h3>AI Success Score</h3><div class="bar-row"><span>AI Readiness</span><div class="bar"><span style="width: 84%"></span></div></div></div>
+      <div class="card"><h3>Early Warning Success</h3><div class="bar-row"><span>Recovery</span><div class="bar"><span style="width: 68%"></span></div></div></div>
+      <div class="card"><h3>Placement Readiness</h3><div class="bar-row"><span>Readiness</span><div class="bar"><span style="width: 79%"></span></div></div></div>
+      <div class="card"><h3>Weak Areas</h3><div class="bar-row"><span>Support Need</span><div class="bar"><span style="width: 61%"></span></div></div></div>
+      <div class="card"><h3>Student Digital Twin</h3><div class="bar-row"><span>Profile</span><div class="bar"><span style="width: 88%"></span></div></div></div>
+    </div>
+  </section>
 
-# ----------------------------------------------------------------------
-# Sidebar filters
-# ----------------------------------------------------------------------
-st.sidebar.title("🎓 Filters")
+  <footer>
+    BrightPath Analytics • Creative school performance experience.
+  </footer>
+</body>
+</html>
+"""
 
-classes = sorted(detailed["class_grade"].unique())
-sections = sorted(detailed["section"].unique())
-subjects = sorted(detailed["subject"].unique())
-genders = sorted(detailed["gender"].unique())
-terms = list(detailed["term"].cat.categories)
 
-sel_classes = st.sidebar.multiselect("Class / Grade", classes, default=classes)
-sel_sections = st.sidebar.multiselect("Section", sections, default=sections)
-sel_subjects = st.sidebar.multiselect("Subject", subjects, default=subjects)
-sel_genders = st.sidebar.multiselect("Gender", genders, default=genders)
-sel_terms = st.sidebar.multiselect("Term", terms, default=terms)
-
-st.sidebar.markdown("---")
-st.sidebar.caption(
-    "Data is synthetic/demo data generated by `src/data_generator.py`. "
-    "Swap in your real dataset via `src/data_processing.py::load_raw()`."
-)
-
-mask = (
-    detailed["class_grade"].isin(sel_classes)
-    & detailed["section"].isin(sel_sections)
-    & detailed["subject"].isin(sel_subjects)
-    & detailed["gender"].isin(sel_genders)
-    & detailed["term"].isin(sel_terms)
-)
-fdf = detailed[mask].copy()
-
-if fdf.empty:
-    st.warning("No data matches the current filters. Adjust the sidebar filters.")
-    st.stop()
-
-filtered_students = fdf["student_id"].unique()
-ftrends = trends[trends["student_id"].isin(filtered_students)]
-
-# ----------------------------------------------------------------------
-# Header
-# ----------------------------------------------------------------------
-st.title("🎓 Student Performance Dashboard")
-st.caption(
-    "An interactive view of student achievement, attendance influence, and risk signals "
-    "across classes, subjects, and terms."
-)
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    [
-        "📊 Overview",
-        "📈 Performance Trends",
-        "🗓️ Attendance Impact",
-        "📚 Subject-wise Analysis",
-        "🔍 Student Drill-down",
-    ]
-)
-
-# ========================================================================
-# TAB 1: OVERVIEW
-# ========================================================================
-with tab1:
-    kpi = kpi_summary(fdf)
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Students", f"{kpi['n_students']:,}")
-    c2.metric("Avg Score", f"{kpi['avg_score']}")
-    c3.metric("Avg Attendance", f"{kpi['avg_attendance']}%")
-    c4.metric("Pass Rate", f"{kpi['pass_rate']}%")
-    c5.metric("Subjects Tracked", kpi["n_subjects"])
-
-    st.markdown("---")
-    insights = dashboard_insights(fdf, ftrends)
-    st.subheader("Quick Insights")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Best Subject", insights["best_subject"])
-    c2.metric("Weakest Subject", insights["weakest_subject"])
-    c3.metric("At Risk", insights["at_risk_count"])
-    c4.metric("Improving", insights["improving_students"])
-
-    st.caption(
-        f"Top student: {insights['top_student']} | Declining: {insights['declining_students']}"
+@app.route("/")
+def home():
+    detailed, _ = get_processed_data()
+    student_count = int(detailed["student_id"].nunique())
+    selected_class = "Class 10"
+    selected_section = "A"
+    roll_range = "01 - 40"
+    return render_template_string(
+        HTML_TEMPLATE,
+        student_count=student_count,
+        selected_class=selected_class,
+        selected_section=selected_section,
+        roll_range=roll_range,
     )
 
-    st.markdown("---")
-    col1, col2 = st.columns([2, 1])
 
-    with col1:
-        st.subheader("Average Score by Term")
-        trend = score_trend_by_term(fdf)
-        fig = px.line(
-            trend, x="term", y="score", markers=True,
-            labels={"score": "Average Score", "term": "Term"},
-        )
-        fig.update_traces(line=dict(width=3))
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        st.subheader("Pass vs Fail")
-        pf = fdf["pass_fail"].value_counts().reset_index()
-        pf.columns = ["Result", "Count"]
-        fig = px.pie(pf, names="Result", values="Count", hole=0.5,
-                     color="Result",
-                     color_discrete_map={"Pass": "#2E7D32", "Fail": "#C62828"})
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.subheader("Student Status Breakdown (based on trend across terms)")
-    status_counts = ftrends["status"].value_counts().reset_index()
-    status_counts.columns = ["Status", "Count"]
-    fig = px.bar(
-        status_counts, x="Status", y="Count", color="Status", text="Count",
-        color_discrete_map={
-            "Improving": "#2E7D32", "Stable": "#1565C0",
-            "Declining": "#EF6C00", "At Risk": "#C62828",
-        },
-    )
-    fig.update_traces(textposition="outside")
-    st.plotly_chart(fig, use_container_width=True)
-
-# ========================================================================
-# TAB 2: PERFORMANCE TRENDS
-# ========================================================================
-with tab2:
-    st.subheader("Score Trend Over Terms — by Segment")
-    segment = st.selectbox(
-        "Split trend by:", ["None", "gender", "class_grade", "section", "subject"],
-        index=1,
-    )
-    group_col = None if segment == "None" else segment
-    trend = score_trend_by_term(fdf, group_col)
-
-    if group_col:
-        fig = px.line(
-            trend, x="term", y="score", color=group_col, markers=True,
-            labels={"score": "Average Score", "term": "Term"},
-        )
-    else:
-        fig = px.line(trend, x="term", y="score", markers=True,
-                       labels={"score": "Average Score", "term": "Term"})
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Score Distribution by Term")
-        fig = px.box(fdf, x="term", y="score", color="term")
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        st.subheader("Improving vs Declining Students")
-        fig = px.histogram(
-            ftrends, x="trend_slope", nbins=40,
-            labels={"trend_slope": "Score change per term (points)"},
-            color_discrete_sequence=["#1565C0"],
-        )
-        fig.add_vline(x=0, line_dash="dash", line_color="red")
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.caption(
-        "Trend slope = linear regression of each student's average score "
-        "against term number. Positive = improving, negative = declining."
+@app.route("/performance")
+def performance_dashboard():
+    detailed, trends = get_processed_data()
+    insights = dashboard_insights(detailed, trends)
+    kpi = kpi_summary(detailed)
+    return render_template_string(
+        """
+        <!doctype html>
+        <html><head><title>Performance Dashboard</title>
+        <style>body{font-family:Segoe UI,Arial,sans-serif; background:#f5f9ff; padding:24px;} .card{background:white;padding:20px;border-radius:16px;box-shadow:0 10px 24px rgba(15,76,129,0.1);margin:12px 0;} .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;} .metric{padding:16px;border-radius:12px;background:#f8fbff;border:1px solid #dce9ff;} a{color:#0f4c81;font-weight:700;text-decoration:none;} @media(max-width:900px){.grid{grid-template-columns:1fr;}}</style></head>
+        <body>
+        <a href="/">← Back to Hub</a>
+        <h1>Performance Dashboard</h1>
+        <div class="grid">
+          <div class="metric">Students <strong>{{ students }}</strong></div>
+          <div class="metric">Average Score <strong>{{ avg_score }}</strong></div>
+          <div class="metric">Attendance <strong>{{ avg_attendance }}%</strong></div>
+          <div class="metric">Pass Rate <strong>{{ pass_rate }}%</strong></div>
+        </div>
+        <div class="card"><h3>Why am I performing poorly?</h3><p>Attendance dips, weak subject areas, and declining trend signals are the main reasons behind lowered performance.</p></div>
+        <div class="card"><h3>Best vs Weakest Subject</h3><p><strong>Best:</strong> {{ best_subject }}<br><strong>Weakest:</strong> {{ weakest_subject }}</p></div>
+        <div class="card"><h3>At-Risk and Improving Students</h3><p>{{ at_risk_count }} at-risk students and {{ improving_students }} improving students.</p></div>
+        </body></html>
+        """,
+        students=kpi["n_students"],
+        avg_score=f"{kpi['avg_score']:.1f}",
+        avg_attendance=f"{kpi['avg_attendance']:.1f}",
+        pass_rate=f"{kpi['pass_rate']:.1f}",
+        best_subject=insights["best_subject"],
+        weakest_subject=insights["weakest_subject"],
+        at_risk_count=insights["at_risk_count"],
+        improving_students=insights["improving_students"],
     )
 
-# ========================================================================
-# TAB 3: ATTENDANCE IMPACT
-# ========================================================================
-with tab3:
-    st.subheader("Attendance Impact on Performance")
-    agg, r, p = attendance_vs_score(fdf)
-    band_perf = attendance_band_performance(fdf)
 
-    strength = (
-        "Strong" if abs(r) >= 0.6 else "Moderate" if abs(r) >= 0.3 else "Weak"
-    )
-    direction = "positive" if r > 0 else "negative"
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Correlation (r)", f"{r:.2f}")
-    c2.metric("p-value", f"{p:.4f}")
-    c3.metric("Score gap across bands", f"{band_perf['avg_score'].max() - band_perf['avg_score'].min():.1f} pts")
-
-    st.info(
-        f"{strength} {direction} relationship between attendance and performance in the current selection. "
-        f"Students in higher attendance bands tend to score better and pass more often."
+@app.route("/early-warning")
+def early_warning_dashboard():
+    detailed, trends = get_processed_data()
+    insights = dashboard_insights(detailed, trends)
+    return render_template_string(
+        """
+        <!doctype html>
+        <html><head><title>Early Warning Dashboard</title><style>body{font-family:Segoe UI,Arial,sans-serif;background:#f5f9ff;padding:24px;} .card{background:white;padding:20px;border-radius:16px;box-shadow:0 10px 24px rgba(15,76,129,0.1);margin:12px 0;} .pill{display:inline-block;padding:8px 12px;border-radius:999px;background:#e8f2ff;color:#0f4c81;font-weight:700;} a{color:#0f4c81;font-weight:700;text-decoration:none;}</style></head>
+        <body>
+        <a href="/">← Back to Hub</a>
+        <h1>Early Warning Dashboard</h1>
+        <div class="card"><span class="pill">Early Warning Success</span><p>This view focuses on students moving from risk toward stability. It highlights {{ at_risk_count }} students who still need intervention support.</p></div>
+        <div class="card"><h3>Intervention Focus</h3><p>Students with low attendance, weak academic trend, and lower scores should receive immediate support.</p></div>
+        </body></html>
+        """,
+        at_risk_count=insights["at_risk_count"],
     )
 
-    st.markdown("---")
-    col1, col2 = st.columns([2, 1])
 
-    with col1:
-        fig = px.scatter(
-            agg,
-            x="avg_attendance",
-            y="avg_score",
-            color="avg_attendance",
-            size="avg_score",
-            trendline="ols",
-            hover_data={"student_id": True, "avg_attendance": ":.1f", "avg_score": ":.1f"},
-            labels={"avg_attendance": "Average Attendance (%)", "avg_score": "Average Score"},
-            opacity=0.75,
-        )
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        st.subheader("Attendance Band Summary")
-        summary_table = band_perf[["attendance_band", "avg_score", "pass_rate", "n"]].copy()
-        summary_table.columns = ["Band", "Avg Score", "Pass Rate (%)", "Students"]
-        st.dataframe(summary_table, use_container_width=True, hide_index=True)
-
-    st.markdown("---")
-    st.subheader("Performance by Attendance Band")
-
-    band_counts = (
-        fdf.groupby("attendance_band", observed=True)["student_id"]
-        .nunique()
-        .reset_index(name="students")
-    )
-    band_counts["attendance_band"] = pd.Categorical(
-        band_counts["attendance_band"],
-        categories=band_perf["attendance_band"].tolist(),
-        ordered=True,
-    )
-    band_counts = band_counts.sort_values("attendance_band")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        fig = px.bar(
-            band_perf,
-            x="attendance_band",
-            y="avg_score",
-            color="attendance_band",
-            text_auto=".1f",
-            labels={"attendance_band": "Attendance Band", "avg_score": "Average Score"},
-        )
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        fig = px.bar(
-            band_perf,
-            x="attendance_band",
-            y="pass_rate",
-            color="attendance_band",
-            text_auto=".1f",
-            labels={"attendance_band": "Attendance Band", "pass_rate": "Pass Rate (%)"},
-        )
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.subheader("Student Distribution by Attendance Band")
-    fig = px.pie(
-        band_counts,
-        names="attendance_band",
-        values="students",
-        hole=0.45,
-        color="attendance_band",
-        color_discrete_map={
-            "Low (<75%)": "#E53935",
-            "Medium (75-89%)": "#FB8C00",
-            "High (90-100%)": "#43A047",
-        },
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-# ========================================================================
-# TAB 4: SUBJECT-WISE ANALYSIS
-# ========================================================================
-with tab4:
-    st.subheader("Subject-wise Performance")
-    subj = subject_performance(fdf)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        fig = px.bar(
-            subj.sort_values("avg_score"), x="avg_score", y="subject", orientation="h",
-            text_auto=".1f", color="avg_score", color_continuous_scale="Blues",
-            labels={"avg_score": "Average Score", "subject": "Subject"},
-        )
-        fig.update_layout(coloraxis_showscale=False)
-        st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        fig = px.bar(
-            subj.sort_values("pass_rate"), x="pass_rate", y="subject", orientation="h",
-            text_auto=".1f", color="pass_rate", color_continuous_scale="Greens",
-            labels={"pass_rate": "Pass Rate (%)", "subject": "Subject"},
-        )
-        fig.update_layout(coloraxis_showscale=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.markdown("---")
-    st.subheader("Class vs Subject Performance Heatmap")
-    heat = subject_by_class(fdf)
-    pivot = heat.pivot(index="class_grade", columns="subject", values="score")
-    fig = px.imshow(
-        pivot, text_auto=".1f", aspect="auto", color_continuous_scale="RdYlGn",
-        labels=dict(x="Subject", y="Class", color="Avg Score"),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.markdown("---")
-    st.subheader("Consistency Check (lower std-dev = more consistent scores)")
-    fig = px.bar(
-        subj.sort_values("std_dev"), x="subject", y="std_dev", color="std_dev",
-        color_continuous_scale="Oranges", text_auto=".1f",
-        labels={"std_dev": "Score Std. Deviation", "subject": "Subject"},
-    )
-    fig.update_layout(coloraxis_showscale=False)
-    st.plotly_chart(fig, use_container_width=True)
-
-# ========================================================================
-# TAB 5: STUDENT DRILL-DOWN
-# ========================================================================
-with tab5:
-    st.subheader("At-Risk Students")
-    st.caption(
-        "Flagged when: attendance < 75%, declining trend, and overall "
-        "average score < 60 across the selected terms."
-    )
-    at_risk = ftrends[ftrends["risk_flag"]].sort_values("overall_avg_score")
-    st.dataframe(
-        at_risk[[
-            "student_id", "name", "class_grade", "section",
-            "overall_avg_score", "overall_avg_attendance", "trend_slope", "status",
-        ]],
-        use_container_width=True, hide_index=True,
+@app.route("/placement-readiness")
+def placement_readiness_dashboard():
+    detailed, trends = get_processed_data()
+    insights = dashboard_insights(detailed, trends)
+    return render_template_string(
+        """
+        <!doctype html>
+        <html><head><title>Placement Readiness Dashboard</title><style>body{font-family:Segoe UI,Arial,sans-serif;background:#f5f9ff;padding:24px;} .card{background:white;padding:20px;border-radius:16px;box-shadow:0 10px 24px rgba(15,76,129,0.1);margin:12px 0;} a{color:#0f4c81;font-weight:700;text-decoration:none;}</style></head>
+        <body>
+        <a href="/">← Back to Hub</a>
+        <h1>Placement Readiness Dashboard</h1>
+        <div class="card"><h3>Placement Signal</h3><p>Students with stronger attendance and solid subject performance are better prepared for placements and future opportunities.</p></div>
+        <div class="card"><h3>Readiness Score</h3><p>Current readiness is supported by strong performance in {{ best_subject }} and healthy attendance trends.</p></div>
+        </body></html>
+        """,
+        best_subject=insights["best_subject"],
     )
 
-    st.markdown("---")
-    st.subheader("Individual Student Profile")
-    student_options = sorted(fdf["student_id"].unique())
-    sel_student = st.selectbox("Select a student", student_options)
 
-    sdf = fdf[fdf["student_id"] == sel_student]
-    srow = ftrends[ftrends["student_id"] == sel_student].iloc[0]
+@app.route("/digital-twin")
+def digital_twin_dashboard():
+    detailed, trends = get_processed_data()
+    insights = dashboard_insights(detailed, trends)
+    return render_template_string(
+        """
+        <!doctype html>
+        <html><head><title>Student Digital Twin</title><style>body{font-family:Segoe UI,Arial,sans-serif;background:#f5f9ff;padding:24px;} .card{background:white;padding:20px;border-radius:16px;box-shadow:0 10px 24px rgba(15,76,129,0.1);margin:12px 0;} a{color:#0f4c81;font-weight:700;text-decoration:none;}</style></head>
+        <body>
+        <a href="/">← Back to Student Portal</a>
+        <h1>Student Digital Twin</h1>
+        <div class="card"><h3>Student Digital Twin</h3><p>This simulated profile summarises the student learning state with a focus on performance, attendance, and support needs.</p></div>
+        <div class="card"><h3>Current Profile</h3><p>Best subject: {{ best_subject }}<br>Weakest subject: {{ weakest_subject }}<br>At-risk count: {{ at_risk_count }}</p></div>
+        </body></html>
+        """,
+        best_subject=insights["best_subject"],
+        weakest_subject=insights["weakest_subject"],
+        at_risk_count=insights["at_risk_count"],
+    )
 
-    st.write(f"**{srow['name']}** — Class {srow['class_grade']}{srow['section']} — "
-             f"Status: **{srow['status']}**")
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Overall Avg Score", srow["overall_avg_score"])
-    c2.metric("Overall Avg Attendance", f"{srow['overall_avg_attendance']}%")
-    c3.metric("Trend (pts/term)", srow["trend_slope"])
+@app.route("/overall-dashboard")
+def overall_dashboard():
+    detailed, trends = get_processed_data()
+    insights = dashboard_insights(detailed, trends)
+    kpi = kpi_summary(detailed)
+    return render_template_string(
+        """
+        <!doctype html>
+        <html><head><title>Overall Creative Dashboard</title><style>body{font-family:Segoe UI,Arial,sans-serif;background:#f5f9ff;padding:24px;} .card{background:white;padding:20px;border-radius:16px;box-shadow:0 10px 24px rgba(15,76,129,0.1);margin:12px 0;} .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;} .metric{padding:16px;border-radius:12px;background:#f8fbff;border:1px solid #dce9ff;} a{color:#0f4c81;font-weight:700;text-decoration:none;} @media(max-width:900px){.grid{grid-template-columns:1fr;}}</style></head>
+        <body>
+        <a href="/">← Back to Student Portal</a>
+        <h1>Overall Creative Dashboard</h1>
+        <div class="grid">
+          <div class="metric">Students <strong>{{ students }}</strong></div>
+          <div class="metric">Average Score <strong>{{ avg_score }}</strong></div>
+          <div class="metric">Attendance <strong>{{ avg_attendance }}%</strong></div>
+          <div class="metric">Pass Rate <strong>{{ pass_rate }}%</strong></div>
+        </div>
+        <div class="card"><h3>Performance Story</h3><p>This overall view brings together performance, attendance, weak areas, and student support health into a single creative dashboard.</p></div>
+        <div class="card"><h3>Insights</h3><p>Best subject: {{ best_subject }}<br>Weakest subject: {{ weakest_subject }}<br>At-risk students: {{ at_risk_count }}<br>Improving students: {{ improving_students }}</p></div>
+        </body></html>
+        """,
+        students=kpi["n_students"],
+        avg_score=f"{kpi['avg_score']:.1f}",
+        avg_attendance=f"{kpi['avg_attendance']:.1f}",
+        pass_rate=f"{kpi['pass_rate']:.1f}",
+        best_subject=insights["best_subject"],
+        weakest_subject=insights["weakest_subject"],
+        at_risk_count=insights["at_risk_count"],
+        improving_students=insights["improving_students"],
+    )
 
-    col1, col2 = st.columns(2)
-    with col1:
-        by_term = sdf.groupby("term", observed=True)["score"].mean().reset_index()
-        fig = px.line(by_term, x="term", y="score", markers=True, title="Score by Term")
-        st.plotly_chart(fig, use_container_width=True)
-    with col2:
-        by_subject = sdf.groupby("subject", observed=True)["score"].mean().reset_index()
-        fig = px.bar(by_subject, x="subject", y="score", title="Score by Subject")
-        st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("---")
-    st.subheader("Top & Bottom Performers")
-    top, bottom = top_bottom_students(ftrends, n=10)
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write("**Top 10**")
-        st.dataframe(
-            top[["student_id", "name", "overall_avg_score", "overall_avg_attendance"]],
-            use_container_width=True, hide_index=True,
-        )
-    with col2:
-        st.write("**Bottom 10**")
-        st.dataframe(
-            bottom[["student_id", "name", "overall_avg_score", "overall_avg_attendance"]],
-            use_container_width=True, hide_index=True,
-        )
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
