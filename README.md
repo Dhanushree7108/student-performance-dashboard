@@ -402,3 +402,16 @@ Through this project, I gained practical experience in:
 - Data cleaning and feature engineering.
 - Exploratory data analysis.
 - Statistical analysis and correlation
+👩‍💻 Author
+
+Dhanushree C A
+
+Artificial Intelligence and Machine Learning
+
+GitHub: Dhanushree7108
+
+LinkedIn: Dhanushree C A
+
+⭐ If you find this project useful, consider giving the repository a star!
+
+Built with Python, Data Analytics, and Streamlit. 🎓📊
